@@ -209,12 +209,10 @@ class TrackManagementCog(commands.Cog):
             src_path = os.path.join(source_folder, filename)
             dst_path = os.path.join(target_folder, filename)
 
-            # Проверка: существует ли исходный файл?
             if not os.path.isfile(src_path):
                 await inter.edit_original_message(f"Файл **{filename}** не найден в категории `{source_type}`.")
                 return
 
-            # Проверка: не перезаписываем файл в целевой категории
             if os.path.exists(dst_path):
                 await inter.edit_original_message(
                     f"В категории `{target_type}` уже есть файл с именем **{filename}**."
@@ -258,7 +256,6 @@ class TrackManagementCog(commands.Cog):
             await inter.edit_original_message("❌ Не удалось определить длительность.")
             return
 
-        # Форматируем в часы:минуты:секунды
         hrs = int(duration_sec // 3600)
         mins = int((duration_sec % 3600) // 60)
         secs = int(duration_sec % 60)

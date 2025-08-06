@@ -53,10 +53,6 @@ class AudioMixer:
         Использует aloop для быстрого повтора и избегает вызова ffprobe.
         """
 
-        # Чтобы избежать получения длительности, просто вставим оба трека и
-        # будем повторять один из них через aloop
-
-        # Мы сначала определим, какой трек короче (он будет лупиться)
         dur_music = AudioMixer.get_track_duration(music_path)
         dur_ambient = AudioMixer.get_track_duration(ambient_path)
 
@@ -81,7 +77,7 @@ class AudioMixer:
                 f"[1:a]volume={short_vol},aloop=loop=-1:size=2e+07[a1];"
                 f"[a0][a1]amix=inputs=2:duration=first"
             ),
-            "-c:a", "libmp3lame",  # или "aac" для ещё большей скорости
+            "-c:a", "libmp3lame",
             "-threads", "2",
             output_path,
         ]
@@ -96,62 +92,3 @@ class AudioMixer:
             raise RuntimeError(f"Ошибка микширования аудио: {error_message}")
 
         logging.info(f"Микширование завершено. Файл сохранён: {output_path}")
-
-    # def mix_tracks(
-    #     music_path: str,
-    #     ambient_path: str,
-    #     music_vol: float,
-    #     ambient_vol: float,
-    #     output_path: str,
-    # ):
-    #     """
-    #     Микширует две аудиодорожки (музыку и эмбиент), подгоняя длину под более длинный трек.
-    #     Короткий трек проигрывается в бесконечном цикле с помощью -stream_loop.
-    #     """
-    #
-    #     # Получаем длительности
-    #     duration_music = AudioMixer.get_track_duration(music_path)
-    #     duration_ambient = AudioMixer.get_track_duration(ambient_path)
-    #
-    #     # Определяем, какой трек длиннее (будет основным)
-    #     if duration_music >= duration_ambient:
-    #         long_path = music_path
-    #         long_vol = music_vol
-    #         short_path = ambient_path
-    #         short_vol = ambient_vol
-    #     else:
-    #         long_path = ambient_path
-    #         long_vol = ambient_vol
-    #         short_path = music_path
-    #         short_vol = music_vol
-    #
-    #     # Формируем команду ffmpeg:
-    #     # -i long_path — основной трек
-    #     # -stream_loop -1 -i short_path — короткий трек в бесконечном лупе
-    #     # В фильтре задаём громкость и микшируем, обрезая итог по длине первого трека (duration=first)
-    #     command = [
-    #         "ffmpeg",
-    #         "-y",  # перезаписывать выходной файл без подтверждения
-    #         "-i", long_path,
-    #         "-stream_loop", "-1",
-    #         "-i", short_path,
-    #         "-filter_complex",
-    #         (f"[0:a]volume={long_vol}[a_long];"
-    #          f"[1:a]volume={short_vol}[a_short];"
-    #          f"[a_long][a_short]amix=inputs=2:duration=first:dropout_transition=0"),
-    #         "-c:a",
-    #         "libmp3lame",
-    #         output_path,
-    #     ]
-    #
-    #     logging.info(f"Запуск ffmpeg для микширования: {' '.join(command)}")
-    #
-    #     # Запускаем процесс
-    #     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #
-    #     if result.returncode != 0:
-    #         error_message = result.stderr.decode(errors="ignore")
-    #         logging.error(f"Ошибка микширования: {error_message}")
-    #         raise RuntimeError(f"Ошибка микширования аудио: {error_message}")
-    #
-    #     logging.info(f"Микширование успешно завершено, файл сохранён: {output_path}")

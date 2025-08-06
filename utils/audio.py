@@ -74,12 +74,11 @@ class AudioSourceManager:
             while True:
                 async with self._play_lock:
                     await self._play_source(path, seek_seconds=seek_seconds)
-                    seek_seconds = 0.0  # только при первом запуске использовать seek
+                    seek_seconds = 0.0
 
                 Logger.log(f"[{self.guild_id}] Воспроизведение трека завершено")
 
                 if not self.loop_flags.get(self.current_type, False):
-                    # Автоматический выход из голосового канала
                     if self.voice and self.voice.is_connected():
                         await self.voice.disconnect()
                         Logger.log(f"[{self.guild_id}] Бот покинул голосовой канал после завершения трека")
