@@ -20,7 +20,8 @@ import os
 
 from utils.audio import AudioSourceManager
 from utils.autocomplete_helpers import filename_autocomplete
-from utils.functions import get_user_folder, get_files_in_folder
+from utils.commands import play_command
+from utils.functions import get_user_folder, get_files_in_folder, ensure_voice
 from utils.mix import AudioMixer
 
 class MusicCog(commands.Cog):
@@ -28,41 +29,11 @@ class MusicCog(commands.Cog):
         self.bot = bot
         self.guild_players = {}  # guild_id: AudioSourceManager
 
-    @staticmethod
-    async def ensure_voice(player: AudioSourceManager, voice_channel: disnake.VoiceChannel):
-        if player.voice is None or not player.voice.is_connected():
-            player.voice = await voice_channel.connect()
-        elif player.voice.channel.id != voice_channel.id:
-            await player.voice.move_to(voice_channel)
-
     @commands.slash_command(name="play", description="Проиграть трек из вашей коллекции")
     async def play(self, inter: disnake.ApplicationCommandInteraction,
                    track_type: str = commands.Param(choices=["music", "ambient", "mixed"], description="Категория трека"),
                    filename: str = commands.Param(description="Имя файла трека")):
-        await inter.response.defer()
-        guild_id = inter.guild_id
-
-        if not inter.author.voice or not inter.author.voice.channel:
-            await inter.edit_original_message("Вы должны быть в голосовом канале!")
-            return
-
-        voice_channel = inter.author.voice.channel
-
-        player = self.guild_players.get(guild_id)
-        if not player:
-            player = AudioSourceManager(guild_id)
-            self.guild_players[guild_id] = player
-
-        await self.ensure_voice(player, voice_channel)
-
-        user_folder = get_user_folder(track_type, inter.author.id)
-        path = os.path.join(user_folder, filename)
-        if not os.path.exists(path):
-            await inter.edit_original_message("Трек не найден.")
-            return
-
-        await player.play(path, track_type=track_type)
-        await inter.edit_original_message(f"🎵 Проигрывается: `{filename}` из категории `{track_type}`")
+        await play_command(self.guild_players, inter, track_type, filename)
 
     @commands.slash_command(description="Показать текущий проигрываемый трек")
     async def now_playing(self, inter: disnake.ApplicationCommandInteraction):
@@ -189,7 +160,7 @@ class MusicCog(commands.Cog):
             return
 
         voice_channel = inter.author.voice.channel
-        await self.ensure_voice(player, voice_channel)
+        await ensure_voice(player, voice_channel)
 
         await inter.edit_original_message(f"Проигрывается микс `{output_filename}`")
 

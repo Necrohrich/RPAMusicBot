@@ -15,6 +15,16 @@
 import os
 from typing import Optional
 
+import disnake
+
+from utils.audio import AudioSourceManager
+
+
+async def ensure_voice(player: AudioSourceManager, voice_channel: disnake.VoiceChannel):
+    if player.voice is None or not player.voice.is_connected():
+        player.voice = await voice_channel.connect()
+    elif player.voice.channel.id != voice_channel.id:
+        await player.voice.move_to(voice_channel)
 
 def get_user_folder(track_type: str, user_id: int) -> str:
     folder = f"music/{track_type}/{user_id}"
