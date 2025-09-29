@@ -16,7 +16,8 @@ from disnake import OptionChoice
 from utils.functions import get_user_folder, get_files_in_folder
 
 async def filename_autocomplete(inter, user_input: str):
-    track_type = inter.options.get("track_type") or inter.options.get("source_type")
+    track_type = inter.filled_options.get("track_type") or inter.filled_options.get("source_type")
+    print(track_type)
     if not track_type:
         return []
     user_folder = get_user_folder(track_type, inter.author.id)

@@ -20,24 +20,23 @@ import os
 
 from utils.audio import AudioSourceManager
 from utils.autocomplete_helpers import filename_autocomplete
-from utils.commands import play_command
+from utils.commands import play_command, pause_command, resume_command, stop_command, loop_command
 from utils.functions import get_user_folder, get_files_in_folder, ensure_voice
 from utils.mix import AudioMixer
 
 class MusicCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.guild_players = {}  # guild_id: AudioSourceManager
 
     @commands.slash_command(name="play", description="Проиграть трек из вашей коллекции")
     async def play(self, inter: disnake.ApplicationCommandInteraction,
                    track_type: str = commands.Param(choices=["music", "ambient", "mixed"], description="Категория трека"),
                    filename: str = commands.Param(description="Имя файла трека")):
-        await play_command(self.guild_players, inter, track_type, filename)
+        await play_command(self.bot.guild_players, inter, track_type, filename)
 
     @commands.slash_command(description="Показать текущий проигрываемый трек")
     async def now_playing(self, inter: disnake.ApplicationCommandInteraction):
-        player = self.guild_players.get(inter.guild_id)
+        player = self.bot.guild_players.get(inter.guild_id)
         if not player or not player.current_track or not player.voice or not player.voice.is_playing():
             await inter.response.send_message("Сейчас ничего не воспроизводится.", ephemeral=True)
             return
@@ -47,34 +46,22 @@ class MusicCog(commands.Cog):
 
     @commands.slash_command(description="Поставить трек на паузу")
     async def pause(self, inter: disnake.ApplicationCommandInteraction):
-        player = self.guild_players.get(inter.guild_id)
-        if not player or not player.voice or not player.voice.is_playing():
-            await inter.response.send_message("Нечего ставить на паузу.", ephemeral=True)
-            return
-        player.pause()
-        await inter.response.send_message("⏸ Пауза")
+        player = self.bot.guild_players.get(inter.guild_id)
+        await pause_command(player, inter)
 
     @commands.slash_command(description="Продолжить воспроизведение")
     async def resume(self, inter: disnake.ApplicationCommandInteraction):
-        player = self.guild_players.get(inter.guild_id)
-        if not player or not player.voice or not player.voice.is_paused():
-            await inter.response.send_message("Нечего продолжать.", ephemeral=True)
-            return
-        player.resume()
-        await inter.response.send_message("▶ Продолжено")
+        player = self.bot.guild_players.get(inter.guild_id)
+        await resume_command(player, inter)
 
     @commands.slash_command(description="Остановить воспроизведение")
     async def stop(self, inter: disnake.ApplicationCommandInteraction):
-        player = self.guild_players.get(inter.guild_id)
-        if not player or not player.voice or not player.voice.is_playing():
-            await inter.response.send_message("Нечего останавливать.", ephemeral=True)
-            return
-        player.stop()
-        await inter.response.send_message("⏹ Остановлено")
+        player = self.bot.guild_players.get(inter.guild_id)
+        await stop_command(player, inter)
 
     @commands.slash_command(description="Покинуть голосовой канал")
     async def leave(self, inter: disnake.ApplicationCommandInteraction):
-        player = self.guild_players.get(inter.guild_id)
+        player = self.bot.guild_players.get(inter.guild_id)
         if player and player.voice:
             await player.cancel_loop_task()
             await player.voice.disconnect()
@@ -86,7 +73,7 @@ class MusicCog(commands.Cog):
     @commands.slash_command(description="Установить громкость воспроизведения")
     async def set_volume(self, inter: disnake.ApplicationCommandInteraction,
                          volume: float = commands.Param(ge=0.0, le=2.0, description="Громкость от 0.0 до 2.0")):
-        player = self.guild_players.get(inter.guild_id)
+        player = self.bot.guild_players.get(inter.guild_id)
         if not player or not player.current_type:
             await inter.response.send_message("Плеер не инициализирован или нет текущего трека.", ephemeral=True)
             return
@@ -97,7 +84,7 @@ class MusicCog(commands.Cog):
     @commands.slash_command(description="Перемотать трек на указанную позицию (в секундах)")
     async def seek(self, inter: disnake.ApplicationCommandInteraction,
                    position: float = commands.Param(ge=0.0, description="Позиция в секундах для перемотки")):
-        player = self.guild_players.get(inter.guild_id)
+        player = self.bot.guild_players.get(inter.guild_id)
         if not player or not player.current_track:
             await inter.response.send_message("Нет проигрываемого трека.", ephemeral=True)
             return
@@ -110,13 +97,8 @@ class MusicCog(commands.Cog):
     @commands.slash_command(description="Включить или выключить повтор текущего трека")
     async def loop(self, inter: disnake.ApplicationCommandInteraction,
                    enable: bool = commands.Param(description="Включить (true) или выключить (false) повтор")):
-        player = self.guild_players.get(inter.guild_id)
-        if not player or not player.current_type:
-            await inter.response.send_message("Плеер не инициализирован или нет текущего трека.", ephemeral=True)
-            return
-        player.set_loop(player.current_type, enable)
-        status = "включён" if enable else "выключен"
-        await inter.response.send_message(f"Повтор трека {status}.")
+        player = self.bot.guild_players.get(inter.guild_id)
+        await loop_command(player, inter, enable)
 
     @commands.slash_command(description="Создать и проиграть микс из музыки и эмбиента")
     async def mix(self, inter: disnake.ApplicationCommandInteraction,
@@ -150,10 +132,10 @@ class MusicCog(commands.Cog):
             await inter.edit_original_message(f"Ошибка микширования: {e}")
             return
 
-        player = self.guild_players.get(guild_id)
+        player = self.bot.guild_players.get(guild_id)
         if not player:
             player = AudioSourceManager(guild_id)
-            self.guild_players[guild_id] = player
+            self.bot.guild_players[guild_id] = player
 
         if not inter.author.voice or not inter.author.voice.channel:
             await inter.edit_original_message("Вы должны быть в голосовом канале!")

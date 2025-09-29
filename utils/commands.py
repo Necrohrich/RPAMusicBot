@@ -5,7 +5,7 @@ import disnake
 from utils.audio import AudioSourceManager
 from utils.functions import get_user_folder, ensure_voice
 
-async def play_command(guild_players, inter: disnake.ApplicationCommandInteraction, track_type:str, filename: str):
+async def play_command(guild_players, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction, track_type:str, filename: str):
     await inter.response.defer()
     guild_id = inter.guild_id
 
@@ -30,3 +30,32 @@ async def play_command(guild_players, inter: disnake.ApplicationCommandInteracti
 
     await player.play(path, track_type=track_type)
     await inter.edit_original_message(f"🎵 Проигрывается: `{filename}` из категории `{track_type}`")
+
+async def pause_command(player, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction):
+    if not player or not player.voice or not player.voice.is_playing():
+        await inter.response.send_message("Нечего ставить на паузу.", ephemeral=True)
+        return
+    player.pause()
+    await inter.response.send_message("⏸ Пауза", ephemeral=True)
+
+async def resume_command(player, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction):
+    if not player or not player.voice or not player.voice.is_paused():
+        await inter.response.send_message("Нечего продолжать.", ephemeral=True)
+        return
+    player.resume()
+    await inter.response.send_message("▶ Продолжено", ephemeral=True)
+
+async def stop_command(player, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction):
+    if not player or not player.voice or not player.voice.is_playing():
+        await inter.response.send_message("Нечего останавливать.", ephemeral=True)
+        return
+    player.stop()
+    await inter.response.send_message("⏹ Остановлено", ephemeral=True)
+
+async def loop_command(player, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction, enable):
+    if not player or not player.current_type:
+        await inter.response.send_message("Плеер не инициализирован или нет текущего трека.", ephemeral=True)
+        return
+    player.set_loop(player.current_type, enable)
+    status = "включён" if enable else "выключен"
+    await inter.response.send_message(f"Повтор трека {status}.", ephemeral=True)

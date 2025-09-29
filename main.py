@@ -29,6 +29,8 @@ bot = commands.InteractionBot(intents=intents, reload=False)
 async def on_ready():
     print("Бот готов!")
 
+bot.guild_players = {}
+
 bot.load_extensions('cogs')
 print("Загруженные Cogs:", bot.cogs.keys())
 
