@@ -66,7 +66,7 @@ class MusicCog(commands.Cog):
             await player.cancel_loop_task()
             await player.voice.disconnect()
             player.voice = None
-            await inter.response.send_message("👋 Бот вышел из голосового канала.")
+            await inter.response.send_message("👋 Бот вышел из голосового канала.", ephemeral=True)
         else:
             await inter.response.send_message("Бот не в голосовом канале.", ephemeral=True)
 
@@ -79,7 +79,7 @@ class MusicCog(commands.Cog):
             return
 
         player.set_volume(player.current_type, volume)
-        await inter.response.send_message(f"Громкость для {player.current_type} установлена в {volume}")
+        await inter.response.send_message(f"Громкость для {player.current_type} установлена в {volume}", ephemeral=True)
 
     @commands.slash_command(description="Перемотать трек на указанную позицию (в секундах)")
     async def seek(self, inter: disnake.ApplicationCommandInteraction,
@@ -90,7 +90,7 @@ class MusicCog(commands.Cog):
             return
         try:
             await player.seek(position)
-            await inter.response.send_message(f"Перемотано на {position} секунд.")
+            await inter.response.send_message(f"Перемотано на {position} секунд.", ephemeral=True)
         except Exception as e:
             await inter.response.send_message(f"Ошибка при перемотке: {e}", ephemeral=True)
 
@@ -107,7 +107,7 @@ class MusicCog(commands.Cog):
                   mix_name: str = commands.Param(description="Имя для микса"),
                   music_volume: float = commands.Param(default=1.0, ge=0.0, le=2.0, description="Громкость музыки"),
                   ambient_volume: float = commands.Param(default=0.5, ge=0.0, le=2.0, description="Громкость эмбиента")):
-        await inter.response.defer()
+        await inter.response.defer(ephemeral=True)
         guild_id = inter.guild_id
 
         music_folder = get_user_folder("music", inter.author.id)
@@ -164,6 +164,79 @@ class MusicCog(commands.Cog):
         files = get_files_in_folder(user_folder, user_input)
         return [OptionChoice(name=f, value=f) for f in files[:25]]
 
+    # ------------------ FADE commands ------------------
+    @commands.slash_command(description="Применить fade in/out к текущему треку")
+    async def fade(self, inter: disnake.ApplicationCommandInteraction,
+                   mode: str = commands.Param(choices=["in", "out"], description="Тип фейда"),
+                   duration: float = commands.Param(default=5.0, ge=0.1, le=300.0,
+                                                    description="Длительность фейда в секундах")):
+        player = self.bot.guild_players.get(inter.guild_id)
+        if not player or not player.current_track:
+            await inter.response.send_message("Нет проигрываемого трека.", ephemeral=True)
+            return
+
+        await inter.response.defer(ephemeral=True)
+        if mode == "out":
+            await player.fade_out(duration)
+            await inter.edit_original_message(f"Применён fade-out длительностью {duration} с текущей позиции.")
+        else:
+            # restart with fade-in from start
+            await player.restart_with_fade_in(duration)
+            await inter.edit_original_message(f"Трек перезапущен с fade-in длительностью {duration}.")
+
+    @commands.slash_command(description="Настройки fade для типа треков (вкл/выкл и длительности)")
+    async def fade_config(self, inter: disnake.ApplicationCommandInteraction,
+                          track_type: str = commands.Param(choices=["music", "ambient", "mixed"],
+                                                           description="Тип трека"),
+                          enable_in: bool = commands.Param(default=None, description="Включить fade-in?"),
+                          enable_out: bool = commands.Param(default=None, description="Включить fade-out?"),
+                          in_duration: float = commands.Param(default=None, ge=0.1, le=60.0,
+                                                              description="Длительность fade-in (сек)"),
+                          out_duration: float = commands.Param(default=None, ge=0.1, le=300.0,
+                                                               description="Длительность fade-out (сек)"),
+                          apply_to_current: bool = commands.Param(default=False,
+                                                                  description="Применить out к текущему треку сразу?")):
+        """Изменить настройки fade для текущего плеера (действуют пока плеер существует)."""
+        player = self.bot.guild_players.get(inter.guild_id)
+        if not player:
+            await inter.response.send_message("Плеер не инициализирован.", ephemeral=True)
+            return
+
+        # применяем изменения (если параметр непустой)
+        if enable_in is not None or enable_out is not None:
+            player.set_fade_enabled(track_type, fade_in_enabled=enable_in, fade_out_enabled=enable_out)
+        if in_duration is not None or out_duration is not None:
+            player.set_fade_duration(track_type, in_dur=in_duration, out_dur=out_duration)
+
+        # если нужно — автоматически приглушить текущий трек
+        if apply_to_current and enable_out:
+            cfg = player.get_fade_settings(track_type)
+            out_dur = cfg.get("out_dur", 5.0)
+            # если сейчас играет тот же тип — применим fade_out
+            if player.current_type == track_type and player.voice and player.voice.is_playing():
+                await player.fade_out(out_dur)
+
+        cfg = player.get_fade_settings(track_type)
+        await inter.response.send_message(
+            f"Настройки fade для `{track_type}`: in_enabled={cfg.get('in_enabled')}, in_dur={cfg.get('in_dur')}; "
+            f"out_enabled={cfg.get('out_enabled')}, out_dur={cfg.get('out_dur')}",
+            ephemeral=True
+        )
+
+    @commands.slash_command(description="Показать текущие настройки fade для типа треков")
+    async def fade_status(self, inter: disnake.ApplicationCommandInteraction,
+                          track_type: str = commands.Param(choices=["music", "ambient", "mixed"],
+                                                           description="Тип трека")):
+        player = self.bot.guild_players.get(inter.guild_id)
+        if not player:
+            await inter.response.send_message("Плеер не инициализирован.", ephemeral=True)
+            return
+        cfg = player.get_fade_settings(track_type)
+        await inter.response.send_message(
+            f"Текущие настройки fade для `{track_type}`: in_enabled={cfg.get('in_enabled')}, in_dur={cfg.get('in_dur')}; "
+            f"out_enabled={cfg.get('out_enabled')}, out_dur={cfg.get('out_dur')}",
+            ephemeral=True
+        )
 
 def setup(bot: commands.Bot):
     bot.add_cog(MusicCog(bot))

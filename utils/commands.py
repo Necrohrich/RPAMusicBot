@@ -6,7 +6,7 @@ from utils.audio import AudioSourceManager
 from utils.functions import get_user_folder, ensure_voice
 
 async def play_command(guild_players, inter: disnake.ApplicationCommandInteraction | disnake.MessageInteraction, track_type:str, filename: str):
-    await inter.response.defer()
+    await inter.response.defer(ephemeral=True)
     guild_id = inter.guild_id
 
     if not inter.author.voice or not inter.author.voice.channel:
