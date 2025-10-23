@@ -13,8 +13,22 @@
 # limitations under the License.
 
 import json
+import subprocess
+import sys
+
 import disnake
 from disnake.ext import commands
+
+# ---------- Определяем режим ----------
+is_sfx = len(sys.argv) > 1 and sys.argv[1] == "sfx"
+
+# ---------- Загрузка токенов ----------
+with open("secrets.json", "r", encoding="utf-8") as file:
+    t = json.load(file)
+    TOKEN_MUSIC = t["MUSIC_TOKEN"]
+    TOKEN_SFX = t["SFX_TOKEN"]
+
+TOKEN = TOKEN_SFX if is_sfx else TOKEN_MUSIC
 
 intents = disnake.Intents(
     guilds=True,            # чтобы бот знал о серверах
@@ -27,15 +41,16 @@ bot = commands.InteractionBot(intents=intents, reload=False)
 
 @bot.event
 async def on_ready():
-    print("Бот готов!")
+    print(f"✅ Бот готов! [{bot.user} | {'SFX' if is_sfx else 'Music'}]")
 
 bot.guild_players = {}
 
 bot.load_extensions('cogs')
-print("Загруженные Cogs:", bot.cogs.keys())
+print("Загруженные Cogs:", list(bot.cogs.keys()))
 
-with open("secrets.json", "r", encoding="utf-8") as file:
-    t = json.load(file)
-    TOKEN = t["TOKEN"]
+# ---------- Запуск ----------
+if not is_sfx:
+    subprocess.Popen([sys.executable, __file__, "sfx"])
+    print("🚀 Второй бот (SFX) запущен как отдельный процесс")
 
 bot.run(TOKEN)
