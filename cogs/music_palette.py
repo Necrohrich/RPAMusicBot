@@ -5,21 +5,34 @@ import urllib.parse
 import disnake
 from disnake import ApplicationCommandInteraction, OptionChoice
 from disnake.ext import commands
-from disnake.ui import Button, View
+from disnake.ui import Button, View, Select
 
 from utils.autocomplete_helpers import filename_autocomplete
 from utils.commands import play_command, stop_command, pause_command, resume_command, loop_command
 
 PALETTES_PATH = "data/palettes.json"
 
+
 def _safe_name(s: str) -> str:
     return urllib.parse.quote_plus(s)
+
 
 def _unsafename(s: str) -> str:
     return urllib.parse.unquote_plus(s)
 
+
 class PaletteStorage:
-    """Асинхронно читаем/пишем JSON палет."""
+    """Асинхронно читаем/пишем JSON палет и групп.
+
+    Формат (после обновления):
+    {
+      "<user_id>": {
+         "palettes": { "pal_name": {"1": {...}, ...}, ... },
+         "groups": { "group_name": ["pal1", "pal2", ...], ... }
+      },
+      ...
+    }
+    """
     def __init__(self, path: str = PALETTES_PATH):
         self.path = path
         self._lock = asyncio.Lock()
@@ -53,11 +66,13 @@ class PaletteView(View):
             safe_pid = _safe_name(palette_name)
             custom_id = f"palette:{owner_id}:{safe_pid}:slot:{i}"
             btn = Button(style=disnake.ButtonStyle.primary, label=str(i), custom_id=custom_id)
-            # безопасная фабрика для callback (избегаем проблем с замыканиями)
+
             def make_slot_cb(slot):
                 async def _cb(inter: disnake.MessageInteraction):
                     await cog.on_track_pressed(inter, owner_id, palette_name, slot, self)
+
                 return _cb
+
             btn.callback = make_slot_cb(i)
             self.add_item(btn)
 
@@ -75,16 +90,85 @@ class PaletteView(View):
             custom_id = f"palette_ctrl:{owner_id}:{_safe_name(palette_name)}:{action}"
             style = disnake.ButtonStyle.secondary
             btn = Button(style=style, label=label, custom_id=custom_id)
+
             def make_ctrl_cb(act):
                 async def _cb(inter: disnake.MessageInteraction):
                     await cog.on_control_pressed(inter, owner_id, palette_name, act, self)
+
                 return _cb
+
             btn.callback = make_ctrl_cb(action)
             self.add_item(btn)
 
     def disable_all(self):
         for it in self.children:
             it.disabled = True
+
+
+class GroupView(View):
+    """View, который показывает Select со списком палет из группы.
+
+    При выборе палеты открывает PaletteView для выбранной палеты.
+    """
+    def __init__(self, cog, owner_id: int, group_name: str, palettes_list: list[str], ephemeral: bool):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.owner_id = owner_id
+        self.group_name = group_name
+        self.palettes_list = palettes_list
+        self.ephemeral = ephemeral
+
+        options = [disnake.SelectOption(label=p, value=p) for p in palettes_list]
+        # ограничение size — максимум 25 по условию, но Select поддерживает 1-25
+        select = Select(placeholder="Выберите палету из группы...", options=options, min_values=1, max_values=1)
+
+        async def callback(inter: disnake.MessageInteraction):
+            if inter.author.id != owner_id:
+                await inter.response.send_message("Это не ваша группа.", ephemeral=True)
+                return
+            selected = inter.values[0]
+            uid = owner_id
+            user_palettes = await self.cog._get_user_palettes(uid)
+            if selected not in user_palettes:
+                await inter.response.send_message("Палета не найдена. Возможно, она была удалена.", ephemeral=True)
+                return
+
+            pal_view = PaletteView(self.cog, uid, selected, self.ephemeral)
+            pal = user_palettes[selected]
+
+            embed = disnake.Embed(
+                title=f"Palette — {selected}",
+                description="Нажмите кнопку слота, чтобы воспроизвести. Контролы: Stop/Pause/Loop/Resume/Close"
+            )
+            fields = []
+            for i in range(1, 21):
+                entry = pal.get(str(i))
+                if entry:
+                    fields.append(f"{i}: {entry.get('shortname')}")
+
+            if fields:
+                embed.add_field(name="Назначенные слоты", value="\n".join(fields[:10]), inline=False)
+                if len(fields) > 10:
+                    embed.add_field(name="...", value="\n".join(fields[10:20]), inline=False)
+
+            try:
+                await inter.response.send_message(embed=embed, view=pal_view, ephemeral=self.ephemeral)
+                try:
+                    pal_view.message = await inter.original_message()
+                except Exception:
+                    pal_view.message = None
+            except Exception as e:
+                try:
+                    await inter.followup.send(embed=embed, view=pal_view, ephemeral=self.ephemeral)
+                except Exception:
+                    try:
+                        await inter.channel.send(embed=embed, view=pal_view)
+                    except Exception:
+                        print("Failed to open palette from group:", e)
+
+        select.callback = callback
+        self.add_item(select)
+
 
 class MusicPaletteCog(commands.Cog):
     def __init__(self, bot: commands.Bot, palettes_path: str = PALETTES_PATH):
@@ -95,15 +179,53 @@ class MusicPaletteCog(commands.Cog):
         self.guild_players = self.bot.guild_players
         self.storage = PaletteStorage(palettes_path)
 
-    # ---------- HELPERS ----------
-    async def _get_user_palettes(self, user_id: int) -> dict:
+    # ---------- STORAGE HELPERS ----------
+    async def _get_user_data(self, user_id: int) -> dict:
         data = await self.storage.load()
-        return data.get(str(user_id), {})
+        raw = data.get(str(user_id), {})
+        # legacy: raw is palettes dict
+        if isinstance(raw, dict) and ('palettes' not in raw and 'groups' not in raw):
+            return {"palettes": raw, "groups": {}}
+        if not isinstance(raw, dict):
+            return {"palettes": {}, "groups": {}}
+        return {"palettes": raw.get("palettes", {}), "groups": raw.get("groups", {})}
+
+    async def _save_user_data(self, user_id: int, palettes: dict | None = None, groups: dict | None = None):
+        data = await self.storage.load()
+        existing = data.get(str(user_id), {})
+        # handle legacy existing
+        if isinstance(existing, dict) and ('palettes' not in existing and 'groups' not in existing):
+            existing_palettes = existing
+            existing_groups = {}
+        else:
+            existing_palettes = existing.get('palettes', {}) if isinstance(existing, dict) else {}
+            existing_groups = existing.get('groups', {}) if isinstance(existing, dict) else {}
+
+        if palettes is None:
+            palettes = existing_palettes
+        if groups is None:
+            groups = existing_groups
+
+        data[str(user_id)] = {'palettes': palettes, 'groups': groups}
+        await self.storage.save(data)
+
+    async def _get_user_palettes(self, user_id: int) -> dict:
+        d = await self._get_user_data(user_id)
+        return d.get('palettes', {})
 
     async def _save_user_palettes(self, user_id: int, palettes: dict):
-        data = await self.storage.load()
-        data[str(user_id)] = palettes
-        await self.storage.save(data)
+        d = await self._get_user_data(user_id)
+        groups = d.get('groups', {})
+        await self._save_user_data(user_id, palettes=palettes, groups=groups)
+
+    async def _get_user_groups(self, user_id: int) -> dict:
+        d = await self._get_user_data(user_id)
+        return d.get('groups', {})
+
+    async def _save_user_groups(self, user_id: int, groups: dict):
+        d = await self._get_user_data(user_id)
+        palettes = d.get('palettes', {})
+        await self._save_user_data(user_id, palettes=palettes, groups=groups)
 
     # ---------- CORE ACTIONS ----------
     async def play_from_palette(self, inter: ApplicationCommandInteraction | disnake.MessageInteraction,
@@ -217,16 +339,12 @@ class MusicPaletteCog(commands.Cog):
                     return
             elif action == "loop":
                 if player:
-                    # Определяем текущее состояние loop — сначала храним/читаем _palette_loop_enabled,
-                    # если нет — пробуем player.loop, иначе считаем False.
                     current_state = getattr(player, "_palette_loop_enabled", None)
                     if current_state is None:
                         current_state = getattr(player, "loop", False)
                     new_state = not bool(current_state)
 
-                    # Вызываем loop_command с явно заданным enable
                     await loop_command(player, inter, new_state)
-                    # Сохраняем состояние для будущих переключений
                     setattr(player, "_palette_loop_enabled", bool(new_state))
                     msg = f"Режим loop {'включён' if new_state else 'выключен'}."
                 else:
@@ -263,15 +381,14 @@ class MusicPaletteCog(commands.Cog):
                         print("Close: unexpected error:", e)
                 return
         except Exception as e:
-                        try:
-                            await inter.followup.send(f"Ошибка при выполнении действия: {e}", ephemeral=True)
-                        except Exception:
-                            # если даже followup не сработал — пробуем response (в крайнем случае)
-                            try:
-                                await inter.response.send_message(f"Ошибка при выполнении действия: {e}", ephemeral=True)
-                            except Exception:
-                                pass
-                        return
+            try:
+                await inter.followup.send(f"Ошибка при выполнении действия: {e}", ephemeral=True)
+            except Exception:
+                try:
+                    await inter.response.send_message(f"Ошибка при выполнении действия: {e}", ephemeral=True)
+                except Exception:
+                    pass
+            return
 
         # обновим embed сообщения
         # формируем embed со списком слотов
@@ -310,6 +427,7 @@ class MusicPaletteCog(commands.Cog):
     async def palette(self, inter: ApplicationCommandInteraction):
         pass
 
+    # ---- palette basic commands (create/add/show/delete/list) ----
     @palette.sub_command(name="create", description="Создать новую палету (20 слотов)")
     async def palette_create(self, inter: ApplicationCommandInteraction,
                              name: str = commands.Param(description="Имя палеты")):
@@ -330,7 +448,7 @@ class MusicPaletteCog(commands.Cog):
         palette_name: str = commands.Param(description="Имя палеты"),
         slot: int = commands.Param(ge=1, le=20, description="Слот (1-20)"),
         shortname: str = commands.Param(description="Короткое имя для кнопки"),
-        track_type: str = commands.Param(choices=["music", "ambient", "mixed"], description="Категория трека (music/ambient/...)"),
+        track_type: str = commands.Param(choices=["music", "ambient", "mixed"], description="Категория трека (music/ambient/...)") ,
         filename: str = commands.Param(description="Имя файла (например track.mp3)")
     ):
         await inter.response.defer(ephemeral=True)
@@ -404,7 +522,14 @@ class MusicPaletteCog(commands.Cog):
             await inter.followup.send("Палета не найдена.", ephemeral=True)
             return
         del palettes[palette_name]
+        # также удаляем палету из всех групп пользователя
+        groups = await self._get_user_groups(uid)
+        for gname, items in list(groups.items()):
+            if palette_name in items:
+                items.remove(palette_name)
+                groups[gname] = items
         await self._save_user_palettes(uid, palettes)
+        await self._save_user_groups(uid, groups)
         await inter.followup.send(f"Палета `{palette_name}` удалена.", ephemeral=True)
 
     @palette_add.autocomplete("palette_name")
@@ -432,8 +557,104 @@ class MusicPaletteCog(commands.Cog):
         names = "\n".join(f"- {n}" for n in palettes.keys())
         await inter.followup.send(f"Ваши палеты:\n{names}", ephemeral=True)
 
+    # ---------- GROUP COMMANDS ----------
+    @palette.sub_command(name="group_create", description="Создать группу паллет")
+    async def palette_group_create(self, inter: ApplicationCommandInteraction,
+                                   name: str = commands.Param(description="Имя группы")):
+        await inter.response.defer(ephemeral=True)
+        uid = inter.author.id
+        groups = await self._get_user_groups(uid)
+        if name in groups:
+            await inter.followup.send("Группа с таким именем уже существует.", ephemeral=True)
+            return
+        groups[name] = []
+        await self._save_user_groups(uid, groups)
+        await inter.followup.send(f"Группа паллет `{name}` создана.", ephemeral=True)
+
+    @palette.sub_command(name="group_delete", description="Удалить группу паллет")
+    async def palette_group_delete(self, inter: ApplicationCommandInteraction,
+                                   name: str = commands.Param(description="Имя группы")):
+        await inter.response.defer(ephemeral=True)
+        uid = inter.author.id
+        groups = await self._get_user_groups(uid)
+        if name not in groups:
+            await inter.followup.send("Группа не найдена.", ephemeral=True)
+            return
+        del groups[name]
+        await self._save_user_groups(uid, groups)
+        await inter.followup.send(f"Группа `{name}` удалена.", ephemeral=True)
+
+    @palette.sub_command(name="group_add", description="Добавить паллету в группу")
+    async def palette_group_add(self, inter: ApplicationCommandInteraction,
+                                group_name: str = commands.Param(description="Имя группы"),
+                                palette_name: str = commands.Param(description="Имя палеты")):
+        await inter.response.defer(ephemeral=True)
+        uid = inter.author.id
+        groups = await self._get_user_groups(uid)
+        if group_name not in groups:
+            await inter.followup.send("Группа не найдена.", ephemeral=True)
+            return
+        palettes = await self._get_user_palettes(uid)
+        if palette_name not in palettes:
+            await inter.followup.send("Палета не найдена.", ephemeral=True)
+            return
+        items = groups.get(group_name, [])
+        if palette_name in items:
+            await inter.followup.send("Палета уже в группе.", ephemeral=True)
+            return
+        if len(items) >= 25:
+            await inter.followup.send("В группу можно добавить не более 25 палет.", ephemeral=True)
+            return
+        items.append(palette_name)
+        groups[group_name] = items
+        await self._save_user_groups(uid, groups)
+        await inter.followup.send(f"Палета `{palette_name}` добавлена в группу `{group_name}`.", ephemeral=True)
+
+    @palette_group_add.autocomplete("group_name")
+    @palette_group_delete.autocomplete("name")
+    async def group_name_autocomplete(self, inter: ApplicationCommandInteraction, user_input: str):
+        uid = inter.author.id
+        groups = await self._get_user_groups(uid)
+        res = []
+        for name in groups.keys():
+            if user_input.lower() in name.lower():
+                res.append(OptionChoice(name, name))
+            if len(res) >= 25:
+                break
+        return res
+
+    @palette_group_add.autocomplete("palette_name")
+    async def group_palette_autocomplete(self, inter: ApplicationCommandInteraction, user_input: str):
+        # Reuse palette autocomplete logic
+        return await self.palette_name_autocomplete(inter, user_input)
+
+    @palette.sub_command(name="group_show", description="Показать группу паллет (SelectView)")
+    async def palette_group_show(self, inter: ApplicationCommandInteraction,
+                                 group_name: str = commands.Param(description="Имя группы"),
+                                 ephemeral: bool = commands.Param(default=True, description="Показать как ephemeral?")):
+        uid = inter.author.id
+        groups = await self._get_user_groups(uid)
+        if group_name not in groups:
+            await inter.response.send_message("Группа не найдена.", ephemeral=True)
+            return
+        items = groups[group_name]
+        if not items:
+            await inter.response.send_message("Группа пуста.", ephemeral=True)
+            return
+
+        # создаём GroupView
+        view = GroupView(self, uid, group_name, items, ephemeral)
+        embed = disnake.Embed(title=f"Group — {group_name}", description="Выберите палету из списка ниже:")
+        embed.add_field(name="Палеты в группе", value="\n".join(items[:25]), inline=False)
+
+        await inter.response.send_message(embed=embed, view=view, ephemeral=ephemeral)
+
+    @palette_group_show.autocomplete("group_name")
+    async def group_show_autocomplete(self, inter: ApplicationCommandInteraction, user_input: str):
+        return await self.group_name_autocomplete(inter, user_input)
+
+
 def setup(bot: commands.Bot):
-    # гарантируем наличие shared guild_players
     if not hasattr(bot, "guild_players"):
         bot.guild_players = {}
     bot.add_cog(MusicPaletteCog(bot))
