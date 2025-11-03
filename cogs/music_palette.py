@@ -67,7 +67,7 @@ class PaletteView(View):
     - хранение голосового канала (voice_channel) и guild_id для DM
     """
 
-    def __init__(self, cog, owner_id: int, palette_name: str, ephemeral: bool, timeout: Optional[float] = 3600):
+    def __init__(self, cog, owner_id: int, palette_name: str, ephemeral: bool, timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.cog = cog
         self.owner_id = owner_id
@@ -145,7 +145,7 @@ class GroupView(View):
     При выборе палеты открывает PaletteView для выбранной палеты.
     """
 
-    def __init__(self, cog, owner_id: int, group_name: str, palettes_list: List[str], ephemeral: bool, timeout: Optional[float] = 3600):
+    def __init__(self, cog, owner_id: int, group_name: str, palettes_list: List[str], ephemeral: bool, timeout: Optional[float] = None):
         super().__init__(timeout=timeout)
         self.cog = cog
         self.owner_id = owner_id
