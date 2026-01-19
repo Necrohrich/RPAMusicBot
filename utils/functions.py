@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import asyncio
 import os
 from typing import Optional
 
@@ -19,12 +19,44 @@ import disnake
 
 from utils.audio import AudioSourceManager
 
-
 async def ensure_voice(player: AudioSourceManager, voice_channel: disnake.VoiceChannel):
     if player.voice is None or not player.voice.is_connected():
         player.voice = await voice_channel.connect()
     elif player.voice.channel.id != voice_channel.id:
         await player.voice.move_to(voice_channel)
+
+# async def ensure_voice(player: AudioSourceManager, voice_channel: disnake.VoiceChannel,
+#                        retries: int = 3, timeout: float = 20.0, delay_between: float = 1.0):
+#     """
+#     Попытаться подключиться к voice_channel с retry. Если уже подключен — переместить.
+#     """
+#     if player.voice and player.voice.is_connected():
+#         return
+#
+#     last_exc = None
+#     for attempt in range(1, retries + 1):
+#         try:
+#             if player.voice is None or not player.voice.is_connected():
+#                 # reconnect=True позволит попытаться переподключиться автоматически при разрыве
+#                 player.voice = await voice_channel.connect(timeout=timeout, reconnect=True)
+#             elif player.voice.channel.id != voice_channel.id:
+#                 await player.voice.move_to(voice_channel)
+#             return  # успешно
+#         except asyncio.TimeoutError as e:
+#             last_exc = e
+#             logging.warning("Попытка %d/%d: таймаут при подключении к voice %s (%s)",
+#                             attempt, retries, getattr(voice_channel, "id", "?"), e)
+#         except Exception as e:
+#             last_exc = e
+#             logging.exception("Ошибка при подключении к voice (попытка %d/%d): %s", attempt, retries, e)
+#
+#         # если ещё есть попытки — подождать маленькую паузу
+#         if attempt < retries:
+#             await asyncio.sleep(delay_between)
+#
+#     # если дошли сюда — все попытки провалены
+#     raise last_exc or asyncio.TimeoutError("Не удалось подключиться к voice (неизвестная причина)")
+
 
 def get_user_folder(track_type: str, user_id: int) -> str:
     folder = f"music/{track_type}/{user_id}"
